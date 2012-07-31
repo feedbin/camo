@@ -29,6 +29,11 @@ module CamoProxyTests
     assert_equal(200, response.code)
   end
 
+  def test_crazy_google_cdn_with_weird_params
+    response = request('https://encrypted-tbn1.google.com/images?q=tbn:ANd9GcR_NbJISu0XkUbARqEYG3k03c4pNsxVWT9t3-U2mitjh3fO4Vyxvg')
+    assert_equal(200, response.code)
+  end
+
   def test_proxy_valid_chunked_image_file
     response = request('http://www.igvita.com/posts/12/spdyproxy-diagram.png')
     assert_equal(200, response.code)
