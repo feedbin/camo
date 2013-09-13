@@ -5,7 +5,7 @@ Crypto      = require 'crypto'
 QueryString = require 'querystring'
 
 port            = parseInt process.env.PORT        || 8081
-version         = "1.0.4"
+version         = "1.1.2"
 excluded        = process.env.CAMO_HOST_EXCLUSIONS || '*.example.org'
 shared_key      = process.env.CAMO_KEY             || '0x24FEEDFACEDEADBEEFCAFE'
 max_redirects   = process.env.CAMO_MAX_REDIRECTS   || 4
@@ -94,11 +94,12 @@ process_url = (url, transferred_headers, resp, remaining_redirects) ->
             log newHeaders
 
             resp.writeHead srcResp.statusCode, newHeaders
-            srcResp.on 'data', (chunk) ->
-              resp.write chunk
+            srcResp.pipe resp
           when 301, 302, 303, 307
             if remaining_redirects <= 0
               four_oh_four(resp, "Exceeded max depth")
+            else if !srcResp.headers['location']
+              four_oh_four(resp, "Redirect with no location")
             else
               is_finished = false
               newUrl = Url.parse srcResp.headers['location']
@@ -146,7 +147,7 @@ server = Http.createServer (req, resp) ->
     transferred_headers =
       'Via'                    : user_agent
       'User-Agent'             : user_agent
-      'Accept'                 : req.headers.accept ? '*/*'
+      'Accept'                 : req.headers.accept ? 'image/*'
       'Accept-Encoding'        : req.headers['accept-encoding']
       'x-forwarded-for'        : req.headers['x-forwarded-for']
       'x-content-type-options' : 'nosniff'
@@ -189,8 +190,5 @@ server = Http.createServer (req, resp) ->
 
 console.log "SSL-Proxy running on #{port} with pid:#{process.pid}."
 console.log "Using the secret key #{shared_key}"
-
-Fs.open "tmp/camo.pid", "w", 0o600, (err, fd) ->
-  Fs.writeSync fd, process.pid
 
 server.listen port
