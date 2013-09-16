@@ -110,9 +110,6 @@
           });
           switch (srcResp.statusCode) {
             case 200:
-              if (newHeaders['content-type'] && newHeaders['content-type'].slice(0, 5) !== 'image') {
-                four_oh_four(resp, "Non-Image content-type returned");
-              }
               log(newHeaders);
               resp.writeHead(srcResp.statusCode, newHeaders);
               return srcResp.pipe(resp);
