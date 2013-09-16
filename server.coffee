@@ -158,7 +158,7 @@ server = Http.createServer (req, resp) ->
     else
       url_type = 'query'
       dest_url = QueryString.parse(url.query).url
-
+    
     log({
       type:     url_type
       url:      req.url
