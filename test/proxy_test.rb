@@ -4,7 +4,6 @@ require 'base64'
 require 'openssl'
 require 'rest_client'
 require 'addressable/uri'
-require 'thin'
 
 require 'test/unit'
 
@@ -14,12 +13,70 @@ module CamoProxyTests
       'host' => ENV['CAMO_HOST'] || "http://localhost:8081" }
   end
 
-  def test_proxy_survives_redirect_without_location
-    assert_raise RestClient::ResourceNotFound do
-      request('http://localhost:9292')
+  def spawn_server(path)
+    port = 9292
+    config = "test/servers/#{path}.ru"
+    host = "localhost:#{port}"
+    pid = fork do
+      STDOUT.reopen "/dev/null"
+      STDERR.reopen "/dev/null"
+      exec "rackup", "--port", port.to_s, config
     end
+    sleep 2
+    begin
+      yield host
+    ensure
+      Process.kill(:TERM, pid)
+      Process.wait(pid)
+    end
+  end
+
+  def test_proxy_localhost_test_server
+    spawn_server(:ok) do |host|
+      response = RestClient.get("http://#{host}/octocat.jpg")
+      assert_equal(200, response.code)
+
+      response = request("http://#{host}/octocat.jpg")
+      assert_equal(200, response.code)
+    end
+  end
+
+  def test_proxy_survives_redirect_without_location
+    spawn_server(:redirect_without_location) do |host|
+      assert_raise RestClient::ResourceNotFound do
+        request("http://#{host}")
+      end
+    end
+
     response = request('http://media.ebaumsworld.com/picture/Mincemeat/Pimp.jpg')
     assert_equal(200, response.code)
+  end
+
+  def test_follows_https_redirect_for_image_links
+    response = request('http://dl.dropbox.com/u/602885/github/soldier-squirrel.jpg')
+    assert_equal(200, response.code)
+  end
+
+  def test_doesnt_crash_with_non_url_encoded_url
+    assert_raise RestClient::ResourceNotFound do
+      RestClient.get("#{config['host']}/crashme?url=crash&url=me")
+    end
+  end
+
+  def test_always_sets_security_headers
+    ['/', '/status'].each do |path|
+      response = RestClient.get("#{config['host']}#{path}")
+      assert_equal "deny", response.headers[:x_frame_options]
+      assert_equal "default-src 'none'; style-src 'unsafe-inline'", response.headers[:content_security_policy]
+      assert_equal "nosniff", response.headers[:x_content_type_options]
+      assert_equal "max-age=31536000; includeSubDomains", response.headers[:strict_transport_security]
+    end
+
+    response = request('http://dl.dropbox.com/u/602885/github/soldier-squirrel.jpg')
+    assert_equal "deny", response.headers[:x_frame_options]
+    assert_equal "default-src 'none'; style-src 'unsafe-inline'", response.headers[:content_security_policy]
+    assert_equal "nosniff", response.headers[:x_content_type_options]
+    assert_equal "max-age=31536000; includeSubDomains", response.headers[:strict_transport_security]
   end
 
   def test_proxy_valid_image_url
@@ -27,9 +84,25 @@ module CamoProxyTests
     assert_equal(200, response.code)
   end
 
+  def test_svg_image_with_delimited_content_type_url
+    response = request('https://saucelabs.com/browser-matrix/bootstrap.svg')
+    assert_equal(200, response.code)
+  end
+
+  def test_png_image_with_delimited_content_type_url
+    response = request('http://uploadir.com/u/cm5el1v7')
+    assert_equal(200, response.code)
+  end
+
   def test_proxy_valid_image_url_with_crazy_subdomain
     response = request('http://27.media.tumblr.com/tumblr_lkp6rdDfRi1qce6mto1_500.jpg')
     assert_equal(200, response.code)
+  end
+
+  def test_strict_image_content_type_checking
+    assert_raise RestClient::ResourceNotFound do
+      request("http://calm-shore-1799.herokuapp.com/foo.png")
+    end
   end
 
   def test_proxy_valid_google_chart_url
@@ -41,6 +114,16 @@ module CamoProxyTests
     response = request('http://www.igvita.com/posts/12/spdyproxy-diagram.png')
     assert_equal(200, response.code)
     assert_nil(response.headers[:content_length])
+  end
+
+  def test_proxy_https_octocat
+    response = request('https://octodex.github.com/images/original.png')
+    assert_equal(200, response.code)
+  end
+
+  def test_proxy_https_gravatar
+    response = request('https://1.gravatar.com/avatar/a86224d72ce21cd9f5bee6784d4b06c7')
+    assert_equal(200, response.code)
   end
 
   def test_follows_redirects
@@ -56,6 +139,14 @@ module CamoProxyTests
   def test_follows_redirects_with_path_only_location_headers
     assert_nothing_raised do
       request('http://blogs.msdn.com/photos/noahric/images/9948044/425x286.aspx')
+    end
+  end
+
+  def test_404s_on_request_error
+    spawn_server(:crash_request) do |host|
+      assert_raise RestClient::ResourceNotFound do
+        request("http://#{host}/cats.png")
+      end
     end
   end
 
@@ -89,29 +180,9 @@ module CamoProxyTests
     end
   end
 
-  def test_404s_on_10_0_ip_range
+  def test_404s_on_connect_timeout
     assert_raise RestClient::ResourceNotFound do
       request('http://10.0.0.1/foo.cgi')
-    end
-  end
-
-  16.upto(31) do |i|
-    define_method :"test_404s_on_172_#{i}_ip_range" do
-      assert_raise RestClient::ResourceNotFound do
-        request("http://172.#{i}.0.1/foo.cgi")
-      end
-    end
-  end
-
-  def test_404s_on_169_254_ip_range
-    assert_raise RestClient::ResourceNotFound do
-      request('http://169.254.0.1/foo.cgi')
-    end
-  end
-
-  def test_404s_on_192_168_ip_range
-    assert_raise RestClient::ResourceNotFound do
-      request('http://192.168.0.1/foo.cgi')
     end
   end
 
@@ -122,7 +193,7 @@ module CamoProxyTests
   end
 
   def test_follows_temporary_redirects
-    response = request('http://d.pr/i/rr7F+')
+    response = request('http://bit.ly/1l9Fztb')
     assert_equal(200, response.code)
   end
 
@@ -131,6 +202,14 @@ module CamoProxyTests
       uri = request_uri("http://camo-localhost-test.herokuapp.com")
       response = request( uri )
     end
+  end
+
+  def test_404s_send_cache_headers
+    uri = request_uri("http://example.org/")
+    response = RestClient.get(uri){ |response, request, result| response }
+    assert_equal(404, response.code)
+    assert_equal("0", response.headers[:expires])
+    assert_equal("no-cache, no-store, private, must-revalidate", response.headers[:cache_control])
   end
 end
 
