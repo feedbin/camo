@@ -95,7 +95,6 @@ process_url = (url, transferredHeaders, resp, remaining_redirects) ->
         four_oh_four(resp, "Content-Length exceeded", url)
       else
         newHeaders =
-          'content-type'              : srcResp.headers['content-type']
           'cache-control'             : srcResp.headers['cache-control'] || 'public, max-age=31536000'
           'Camo-Host'                 : camo_hostname
           'X-Frame-Options'           : default_security_headers['X-Frame-Options']
@@ -103,6 +102,9 @@ process_url = (url, transferredHeaders, resp, remaining_redirects) ->
           'X-Content-Type-Options'    : default_security_headers['X-Content-Type-Options']
           'Content-Security-Policy'   : default_security_headers['Content-Security-Policy']
           'Strict-Transport-Security' : default_security_headers['Strict-Transport-Security']
+
+        if contentType = srcResp.headers['content-type']
+          newHeaders['content-type'] = contentType
 
         if eTag = srcResp.headers['etag']
           newHeaders['etag'] = eTag
@@ -133,20 +135,6 @@ process_url = (url, transferredHeaders, resp, remaining_redirects) ->
 
         switch srcResp.statusCode
           when 200
-            contentType = newHeaders['content-type']
-
-            unless contentType?
-              srcResp.destroy()
-              four_oh_four(resp, "No content-type returned", url)
-              return
-
-            contentTypePrefix = contentType.split(";")[0]
-
-            unless contentTypePrefix in accepted_image_mime_types
-              srcResp.destroy()
-              four_oh_four(resp, "Non-Image content-type returned '#{contentTypePrefix}'", url)
-              return
-
             debug_log newHeaders
 
             resp.writeHead srcResp.statusCode, newHeaders
