@@ -1,7 +1,6 @@
 Fs          = require 'fs'
 Path        = require 'path'
 Url         = require 'url'
-Path        = require 'path'
 Http        = require 'http'
 Https       = require 'https'
 Crypto      = require 'crypto'
@@ -14,6 +13,8 @@ max_redirects   = process.env.CAMO_MAX_REDIRECTS   || 4
 camo_hostname   = process.env.CAMO_HOSTNAME        || "unknown"
 socket_timeout  = process.env.CAMO_SOCKET_TIMEOUT  || 10
 logging_enabled = process.env.CAMO_LOGGING_ENABLED || "disabled"
+keep_alive = process.env.CAMO_KEEP_ALIVE || "false"
+
 content_length_limit = parseInt(process.env.CAMO_LENGTH_LIMIT || 5242880, 10)
 
 accepted_image_mime_types = JSON.parse(Fs.readFileSync(
@@ -39,7 +40,7 @@ default_security_headers =
   "X-Frame-Options": "deny"
   "X-XSS-Protection": "1; mode=block"
   "X-Content-Type-Options": "nosniff"
-  "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'"
+  "Content-Security-Policy": "default-src 'none'; img-src data:; style-src 'unsafe-inline'"
   "Strict-Transport-Security" : "max-age=31536000; includeSubDomains"
 
 four_oh_four = (resp, msg, url) ->
@@ -83,6 +84,9 @@ process_url = (url, transferredHeaders, resp, remaining_redirects) ->
       path: queryPath
       headers: transferredHeaders
 
+    if keep_alive == "false"
+      requestOptions['agent'] = false
+
     srcReq = Protocol.get requestOptions, (srcResp) ->
       is_finished = true
 
@@ -95,6 +99,7 @@ process_url = (url, transferredHeaders, resp, remaining_redirects) ->
         four_oh_four(resp, "Content-Length exceeded", url)
       else
         newHeaders =
+          'content-type'              : srcResp.headers['content-type']
           'cache-control'             : srcResp.headers['cache-control'] || 'public, max-age=31536000'
           'Camo-Host'                 : camo_hostname
           'X-Frame-Options'           : default_security_headers['X-Frame-Options']
@@ -102,9 +107,6 @@ process_url = (url, transferredHeaders, resp, remaining_redirects) ->
           'X-Content-Type-Options'    : default_security_headers['X-Content-Type-Options']
           'Content-Security-Policy'   : default_security_headers['Content-Security-Policy']
           'Strict-Transport-Security' : default_security_headers['Strict-Transport-Security']
-
-        if contentType = srcResp.headers['content-type']
-          newHeaders['content-type'] = contentType
 
         if eTag = srcResp.headers['etag']
           newHeaders['etag'] = eTag
@@ -134,11 +136,6 @@ process_url = (url, transferredHeaders, resp, remaining_redirects) ->
             finish resp
 
         switch srcResp.statusCode
-          when 200
-            debug_log newHeaders
-
-            resp.writeHead srcResp.statusCode, newHeaders
-            srcResp.pipe resp
           when 301, 302, 303, 307
             srcResp.destroy()
             if remaining_redirects <= 0
@@ -158,8 +155,24 @@ process_url = (url, transferredHeaders, resp, remaining_redirects) ->
             srcResp.destroy()
             resp.writeHead srcResp.statusCode, newHeaders
           else
+            contentType = newHeaders['content-type']
+
+            unless contentType?
+              srcResp.destroy()
+              four_oh_four(resp, "No content-type returned", url)
+              return
+
+            contentTypePrefix = contentType.split(";")[0].toLowerCase()
+
+            unless contentTypePrefix in accepted_image_mime_types
             srcResp.destroy()
-            four_oh_four(resp, "Origin responded with #{srcResp.statusCode}", url)
+              four_oh_four(resp, "Non-Image content-type returned '#{contentTypePrefix}'", url)
+              return
+
+            debug_log newHeaders
+
+            resp.writeHead srcResp.statusCode, newHeaders
+            srcResp.pipe resp
 
     srcReq.setTimeout (socket_timeout * 1000), ->
       srcReq.abort()
@@ -206,7 +219,7 @@ server = Http.createServer (req, resp) ->
       'Via'                     : user_agent
       'User-Agent'              : user_agent
       'Accept'                  : req.headers.accept ? 'image/*'
-      'Accept-Encoding'         : req.headers['accept-encoding']
+      'Accept-Encoding'         : req.headers['accept-encoding'] ? ''
       "X-Frame-Options"         : default_security_headers["X-Frame-Options"]
       "X-XSS-Protection"        : default_security_headers["X-XSS-Protection"]
       "X-Content-Type-Options"  : default_security_headers["X-Content-Type-Options"]
@@ -252,6 +265,6 @@ server = Http.createServer (req, resp) ->
     else
       four_oh_four(resp, "No pathname provided on the server")
 
-console.log "SSL-Proxy running on #{port} with pid:#{process.pid} version:#{version}."
+console.log "SSL-Proxy running on #{port} with node:#{process.version} pid:#{process.pid} version:#{version}."
 
 server.listen port
