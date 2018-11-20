@@ -165,7 +165,7 @@ process_url = (url, transferredHeaders, resp, remaining_redirects) ->
             contentTypePrefix = contentType.split(";")[0].toLowerCase()
 
             unless contentTypePrefix in accepted_image_mime_types
-            srcResp.destroy()
+              srcResp.destroy()
               four_oh_four(resp, "Non-Image content-type returned '#{contentTypePrefix}'", url)
               return
 
@@ -216,8 +216,8 @@ server = Http.createServer (req, resp) ->
     user_agent = process.env.CAMO_HEADER_VIA or= "Camo Asset Proxy #{version}"
 
     transferredHeaders =
-      'Via'                     : user_agent
-      'User-Agent'              : user_agent
+      'Via'                     : req.headers['user-agent'] ? user_agent
+      'User-Agent'              : req.headers['user-agent'] ? user_agent
       'Accept'                  : req.headers.accept ? 'image/*'
       'Accept-Encoding'         : req.headers['accept-encoding'] ? ''
       "X-Frame-Options"         : default_security_headers["X-Frame-Options"]
